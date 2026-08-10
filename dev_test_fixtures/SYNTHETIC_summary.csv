@@ -1,0 +1,5 @@
+model,language,mean_wer,mean_cer,mean_latency_seconds,n_samples
+indic-conformer-600m,hindi,0.49225,0.2925,1.8151499999999998,20
+indic-conformer-600m,tamil,0.3573,0.19385,2.0299500000000004,20
+whisper-tiny,hindi,0.442,0.2372,1.9968499999999998,20
+whisper-tiny,tamil,0.48069999999999996,0.2781,2.0965499999999997,20

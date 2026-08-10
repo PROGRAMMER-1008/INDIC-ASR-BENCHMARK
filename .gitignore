@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+venv/
+.venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Generated benchmark output -- these are produced by running
+# `python -m src.run_benchmark` and `python -m src.generate_report`.
+#
+# IMPORTANT FOR THIS PROJECT: after you run the benchmark for real and get
+# real numbers, DO commit results/*.csv, results/*.json, and report/*.html
+# -- this is a portfolio project, and a recruiter looking at the GitHub repo
+# without cloning it should be able to see real output (the report.html,
+# the results table) directly on GitHub. Don't leave this section ignoring
+# them once you have real data; delete the three lines below at that point.
+results/*.csv
+results/*.json
+report/*.html
+!results/.gitkeep
+!report/.gitkeep
+
+# HF / torch cache if run locally in-repo
+.cache/
+*.pt
+*.bin

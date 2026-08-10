@@ -1,0 +1,33 @@
+# requirements.txt for Indic ASR Benchmark
+#
+# Two tiers of confidence here -- being upfront about which is which:
+#
+# TESTED IN DEV ENVIRONMENT (installed and actually exercised against this
+# codebase's normalize.py, scoring.py, generate_report.py during development).
+#
+# NOTE: the dev sandbox ran Python 3.12, which resolved pandas==3.0.2 and
+# matplotlib==3.10.8 fine. Those specific patch versions require Python
+# >=3.11 and will fail to install on Python 3.10 (this is the exact error
+# you'll hit if you try the original pins on a 3.10 interpreter). Pinned
+# below to versions confirmed to have Python 3.10-compatible wheels instead
+# -- same APIs used in this project, no behavior differences relevant here.
+pandas==2.2.3
+matplotlib==3.9.2
+jiwer==4.0.0
+
+# PINNED BUT NOT EXECUTED AGAINST THIS CODEBASE -- the dev sandbox used to
+# build this project could not reach huggingface.co (network policy), so
+# data_loader.py, whisper_wrapper.py, and indic_conformer_wrapper.py were
+# never actually run. Versions below are pinned to transformers==4.44.2
+# specifically (not a newer major version) because that's a version whose
+# `pipeline()` and `AutoModel.from_pretrained(..., trust_remote_code=True)`
+# APIs are stable, extensively documented, and match what the wrapper code
+# in this project assumes. When you first run `python3 -m src.run_benchmark`,
+# treat any import/API error here as expected-possible, not a sign you did
+# something wrong -- see README "First Run Checklist."
+torch==2.4.1
+transformers==4.44.2
+datasets==2.21.0
+soundfile==0.12.1      # required by `datasets` for decoding FLEURS audio columns
+librosa==0.10.2.post1  # commonly needed for resampling if a model expects a different sample rate than FLEURS' 16kHz
+accelerate==0.34.2     # transformers uses this for device_map / faster loading in some code paths
