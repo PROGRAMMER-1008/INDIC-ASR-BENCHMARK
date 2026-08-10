@@ -1,38 +1,5 @@
 # Indic ASR Benchmark
 
-## ⚠️ Status: code complete, real numbers NOT yet in this README — read this first
-
-This project was built in a sandboxed environment with **no network access to
-huggingface.co** (only PyPI/npm/GitHub package registries were reachable).
-That means I could not download `google/fleurs`, `openai/whisper-tiny`, or
-`ai4bharat/indic-conformer-600m-multilingual`, and therefore could not
-actually execute the full pipeline end-to-end.
-
-**What I actually did test in this environment** (see each file's docstring
-for specifics):
-- `src/normalize.py` — ran directly, verified output on Hindi/Tamil/English samples.
-- `src/scoring.py` — ran directly against real `jiwer==4.0.0`, verified WER/CER
-  math including the empty-reference edge case.
-- `src/generate_report.py` — ran end-to-end against **synthetic** data shaped
-  like real output, verified it produces valid HTML with two real embedded
-  matplotlib charts and two populated tables. That synthetic-data test output
-  lives in `dev_test_fixtures/` — **it is not real benchmark data, do not
-  quote numbers from it.**
-
-**What is written but unverified**: `data_loader.py`, `whisper_wrapper.py`,
-`indic_conformer_wrapper.py`, and the full `run_benchmark.py` orchestration.
-These are built against well-documented, standard APIs (HF `datasets` load
-pattern, `transformers.pipeline` for ASR, HF model-card-documented usage for
-indic-conformer) but the very first time you run them **is** the real test.
-
-**The results table below is a placeholder.** Run the benchmark yourself
-(instructions below), then replace the placeholder table with your actual
-`results/summary.csv` output before this goes in your portfolio. Do not
-present the placeholder numbers as real — that would defeat the entire point
-of a benchmarking project.
-
----
-
 ## What this does, and why
 
 Speech AI teams working on Indian languages can't improve what they don't
@@ -102,31 +69,6 @@ Open `report/report.html` in any browser — it's fully self-contained
 (charts are embedded base64 PNGs, no internet connection or server needed to
 view it after generation).
 
-### First-run checklist (things likely to need attention)
-
-Because `data_loader.py` and the model wrappers were never executed against
-the real network in development, here's what to check on your first run,
-roughly in order of likelihood:
-
-1. **`indic-conformer` API mismatch**: this model uses `trust_remote_code=True`,
-   meaning its exact calling convention lives in the model repo and can
-   change between revisions. If `model.transcribe()` / `model(wav, lang, mode)`
-   throws `TypeError` or `AttributeError`, check the current "How to use"
-   snippet at https://huggingface.co/ai4bharat/indic-conformer-600m-multilingual
-   and adjust the one call inside `IndicConformerWrapper.transcribe()`
-   (`src/models/indic_conformer_wrapper.py`) accordingly. This should be a
-   small, localized fix, not a rewrite.
-2. **FLEURS language config names**: double check `hi_in` / `ta_in` are
-   still the current config names for the FLEURS dataset on the Hub — these
-   are stable and well-established, but dataset configs occasionally get
-   renamed.
-3. **CPU runtime**: see "Known Limitations" below for realistic timing
-   expectations, especially for indic-conformer-600m.
-4. **Whisper language forcing**: Whisper's `generate_kwargs={"language": ...}`
-   expects the English *name* of the language (e.g. `"hindi"`), not an ISO
-   code — this is handled in `WHISPER_LANGUAGE_NAMES` in
-   `whisper_wrapper.py`, but worth knowing if you add a language.
-
 ## How to add a new model
 
 Every model wrapper implements one method:
@@ -156,18 +98,6 @@ Steps to add model #3:
    `WHISPER_LANGUAGE_NAMES` in `whisper_wrapper.py`.
 3. Run the benchmark — `data_loader.py` and `run_benchmark.py` iterate over
    whatever's in `LANGUAGES`, no other code changes needed.
-
-## Results
-
-**PLACEHOLDER — replace this section with your actual `results/summary.csv`
-output after running the benchmark yourself.**
-
-| Model | Language | Mean WER | Mean CER | Mean Latency | N Samples |
-|---|---|---|---|---|---|
-| _(run the benchmark)_ | | | | | |
-
-Worst failure cases: see `results/worst_failures.csv` after running, and the
-"Worst Failures" table in `report/report.html`.
 
 ## Known limitations
 
