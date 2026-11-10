@@ -1,89 +1,87 @@
 """
-Text normalization applied identically to reference and hypothesis
-transcripts before scoring.
+Text normalization applied identically to reference and hypothesis before
+scoring.
 
-WHY NORMALIZATION MATTERS FOR FAIR COMPARISON
------------------------------------------------
-WER/CER are computed as edit distance over tokens/characters. Two models can
-produce *semantically identical* transcriptions that score very differently
-on raw WER purely because of surface formatting choices that have nothing to
-do with transcription accuracy:
+WHY THIS EXISTS
+---------------
+WER/CER are edit distances. Two transcripts that a human reads as identical
+can score very differently because of formatting that has nothing to do with
+recognition quality: punctuation, casing, double spaces, digits written in
+different scripts, invisible joiner characters, or two different Unicode
+encodings of the same letter. One shared normalizer, applied to every model
+and to the reference, keeps the comparison fair.
 
-  - Whisper tends to emit punctuation and capitalization (it was trained on
-    web text with natural formatting). AI4Bharat's indic-conformer, and the
-    FLEURS reference transcripts themselves, are typically lowercase/
-    punctuation-light.
-  - FLEURS references may have inconsistent whitespace (double spaces,
-    trailing spaces) inherited from the source transcription process.
-  - Indian-language text can have visually-equivalent strings represented
-    with different Unicode normalization forms (e.g. composed vs decomposed
-    diacritics), which edit-distance scoring treats as different characters
-    even though a human reader sees identical text.
-
-If we score raw model output against raw references, a model that happens to
-match the reference's punctuation/casing style gets an unfair WER advantage
-that has nothing to do with how well it actually transcribed the speech. So
-we apply ONE normalization function to both reference and hypothesis, for
-every model, before computing WER/CER. This doesn't make WER "true accuracy"
-(no metric fully captures that) but it does make the comparison *fair*
-across models -- which is the whole point of a benchmark.
-
-Trade-off to be upfront about: normalizing away punctuation/casing means the
-benchmark does NOT measure whether a model gets punctuation or capitalization
-right. If that matters for your use case (e.g. subtitle generation), you'd
-want a second, unnormalized scoring pass. See README "Known Limitations".
+WHAT IT DOES NOT DO (be upfront about this in interviews)
+---------------------------------------------------------
+It does not convert spoken numbers to digits ("दो सौ" vs "200"), does not
+fix spelling variants, and does not judge punctuation quality. Those are
+real error sources and are reported separately as error categories.
 """
 
 import re
 import unicodedata
 
+# Invisible characters that change how text is encoded but not how it reads.
+_INVISIBLE = {
+    "\u200b",  # zero-width space
+    "\u200c",  # zero-width non-joiner
+    "\u200d",  # zero-width joiner
+    "\u2060",  # word joiner
+    "\ufeff",  # byte-order mark
+}
+_WS = re.compile(r"\s+")
 
-def normalize_text(text: str) -> str:
+
+def _is_punct_or_symbol(ch: str) -> bool:
+    # Unicode category P* = punctuation (includes Devanagari danda '।',
+    # curly quotes, em dashes, ellipsis ...). S* = symbols (+, =, $ ...).
+    cat = unicodedata.category(ch)
+    return cat[0] in ("P", "S")
+
+
+def normalize_text(text: str | None) -> str:
     """
-    Apply a consistent normalization pipeline to a transcript string.
-
-    Steps (in order, each documented):
-      1. Unicode NFC normalization -- collapses composed/decomposed
-         equivalent representations of the same character (important for
-         Devanagari/Tamil script where diacritics can be encoded either way).
-      2. Lowercase -- removes casing as a scoring factor. Indic scripts
-         mostly don't have case, but this matters for any Latin-script
-         numerals/loanwords that show up in transcripts.
-      3. Strip punctuation -- removes ASCII and common Unicode punctuation
-         (including Devanagari danda '।' and double danda '॥') so
-         punctuation-style differences between models don't count as errors.
-      4. Normalize whitespace -- collapse multiple spaces/tabs/newlines to
-         a single space, strip leading/trailing whitespace.
-
-    Returns the normalized string. Empty/None input returns "".
+    Pipeline:
+      1. NFC Unicode normalization. This also makes letters like क़ (U+0958)
+         and क+़ (U+0915 U+093C) the same sequence.
+      2. Drop invisible joiner / zero-width characters.
+      3. Lowercase (matters for Latin loan-words).
+      4. Native digits -> ASCII digits (Devanagari ४ -> 4, Tamil ௪ -> 4 ...).
+      5. Punctuation and symbols -> space.
+      6. Collapse whitespace.
     """
     if not text:
         return ""
-
-    # Step 1: Unicode normalization form C (canonical composition)
     text = unicodedata.normalize("NFC", text)
 
-    # Step 2: lowercase
-    text = text.lower()
-
-    # Step 3: strip punctuation. We explicitly include Devanagari danda
-    # (U+0964) and double danda (U+0965) since Python's string.punctuation
-    # and most regex \W classes are Latin-script-centric and miss these.
-    punctuation_pattern = r"[।॥!\"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~]"
-    text = re.sub(punctuation_pattern, " ", text)
-
-    # Step 4: collapse whitespace
-    text = re.sub(r"\s+", " ", text).strip()
-
-    return text
+    out = []
+    for ch in text:
+        if ch in _INVISIBLE:
+            continue
+        if unicodedata.category(ch) == "Nd":          # any script's decimal digit
+            out.append(str(unicodedata.decimal(ch)))
+        elif _is_punct_or_symbol(ch):
+            out.append(" ")
+        else:
+            out.append(ch.lower())
+    return _WS.sub(" ", "".join(out)).strip()
 
 
-if __name__ == "__main__":
-    # Quick manual sanity check
-    samples = [
-        "  नमस्ते,  आप कैसे हैं?  ",
-        "Hello, WORLD!!",
-        "வணக்கம்।  எப்படி இருக்கிறீர்கள்॥",
-    ]
-    for s in samples:
-        print(repr(s), "->", repr(normalize_text(s)))
+def script_ratio(text: str, script_prefix: str) -> float | None:
+    """
+    Fraction of *letters* in `text` that belong to the expected script
+    (e.g. "DEVANAGARI"). Returns None when the text has no letters.
+    Used to catch a classic multilingual failure: asked for Hindi, the
+    model answers in Urdu/Latin script (or a different Indic script).
+    """
+    letters = [c for c in text if unicodedata.category(c).startswith("L")]
+    if not letters:
+        return None
+    hits = 0
+    for c in letters:
+        try:
+            if unicodedata.name(c).startswith(script_prefix):
+                hits += 1
+        except ValueError:
+            pass
+    return hits / len(letters)

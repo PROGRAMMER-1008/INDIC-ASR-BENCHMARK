@@ -1,91 +1,114 @@
 """
 Central configuration for the Indic ASR Benchmark.
 
-Everything that a reviewer might want to tweak (which languages, how many
-samples, which model checkpoints) lives here so the rest of the codebase
-doesn't need to be touched to run a different-sized experiment.
+Everything you might want to change for an experiment lives here: which
+languages, which models, how many samples, which noise levels. Heavy
+libraries (torch etc.) are NOT imported at module level, so the scoring,
+reporting and test code run on a bare-bones install.
 """
 
-# ---------------------------------------------------------------------------
-# Device
-# ---------------------------------------------------------------------------
-# Single source of truth for device selection. Every model wrapper imports
-# DEVICE/TORCH_DTYPE from here instead of re-checking torch.cuda.is_available()
-# independently, so the whole pipeline behaves consistently whether you're
-# on a CPU-only machine or a free-tier Colab GPU.
-#
-# torch is imported inside a try/except here (not at top-of-file) so that
-# modules which only need path/language config -- e.g. generate_report.py,
-# which never touches a model -- don't require torch to be installed just to
-# import this config file. Model wrapper files need torch regardless and
-# import it directly themselves.
-try:
-    import torch
-    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-    # Whisper via transformers pipeline wants torch.float16 on GPU for speed,
-    # but float16 on CPU is either unsupported or slower than float32 on many
-    # ops -- so we branch dtype on device too.
-    TORCH_DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
-except ImportError:
-    DEVICE = "cpu"
-    TORCH_DTYPE = None
-
+from __future__ import annotations
 
 # ---------------------------------------------------------------------------
 # Languages
 # ---------------------------------------------------------------------------
-# FLEURS language codes: https://huggingface.co/datasets/google/fleurs
-# Each entry maps our internal short code -> (FLEURS config name, human name,
-# AI4Bharat indic-conformer language code). AI4Bharat uses ISO 639-1-ish
-# short codes (e.g. "hi", "ta") which differ from FLEURS' "hi_in"/"ta_in".
-LANGUAGES = {
-    "hindi": {
-        "fleurs_config": "hi_in",
-        "display_name": "Hindi",
-        "indic_conformer_code": "hi",
-    },
-    "tamil": {
-        "fleurs_config": "ta_in",
-        "display_name": "Tamil",
-        "indic_conformer_code": "ta",
-    },
+# key -> everything any model or scorer needs to know about the language.
+#   fleurs_config : config name in the google/fleurs dataset
+#   iso           : ISO 639-1 code (faster-whisper and AI4Bharat both use it)
+#   whisper_name  : English name Whisper's `language=` argument accepts
+#   script        : Unicode-name prefix of the expected writing system;
+#                   used to detect "model answered in the wrong script"
+LANGUAGES: dict[str, dict] = {
+    "hindi":   {"fleurs_config": "hi_in", "display_name": "Hindi",   "iso": "hi", "whisper_name": "hindi",   "script": "DEVANAGARI"},
+    "tamil":   {"fleurs_config": "ta_in", "display_name": "Tamil",   "iso": "ta", "whisper_name": "tamil",   "script": "TAMIL"},
+    "bengali": {"fleurs_config": "bn_in", "display_name": "Bengali", "iso": "bn", "whisper_name": "bengali", "script": "BENGALI"},
+    "telugu":  {"fleurs_config": "te_in", "display_name": "Telugu",  "iso": "te", "whisper_name": "telugu",  "script": "TELUGU"},
+    "marathi": {"fleurs_config": "mr_in", "display_name": "Marathi", "iso": "mr", "whisper_name": "marathi", "script": "DEVANAGARI"},
 }
 
 # ---------------------------------------------------------------------------
-# Sample size
+# Models  (name -> spec; the factory lives in src/models/registry.py)
 # ---------------------------------------------------------------------------
-# Start small. On CPU, whisper-tiny + indic-conformer-600m on 20 samples/lang
-# (40 total per model, 80 total inferences across 2 models) is a reasonable
-# few-minutes-to-~30-minutes run depending on hardware. Raise this once you've
-# confirmed the pipeline runs cleanly end-to-end on a handful of samples.
-SAMPLES_PER_LANGUAGE = 20
+MODELS: dict[str, dict] = {
+    "whisper-tiny":                 {"family": "whisper",        "checkpoint": "openai/whisper-tiny",           "params_m": 39},
+    "whisper-base":                 {"family": "whisper",        "checkpoint": "openai/whisper-base",           "params_m": 74},
+    "whisper-small":                {"family": "whisper",        "checkpoint": "openai/whisper-small",          "params_m": 244},
+    "whisper-large-v3-turbo":       {"family": "whisper",        "checkpoint": "openai/whisper-large-v3-turbo", "params_m": 809},
+    "faster-whisper-small":         {"family": "faster-whisper", "checkpoint": "small",                         "params_m": 244},
+    "faster-whisper-large-v3-turbo":{"family": "faster-whisper", "checkpoint": "large-v3-turbo",                "params_m": 809},
+    "indic-conformer-600m":         {"family": "indic-conformer","checkpoint": "ai4bharat/indic-conformer-600m-multilingual", "params_m": 600, "decoding": "ctc"},
+}
 
-# FLEURS "test" split is used per the assignment -- it's held out and not
-# used for training any of the models we're benchmarking (to the best of
-# public documentation), which is the right split for an eval-only benchmark.
+# ---------------------------------------------------------------------------
+# Profiles: pick how big a run you want with `--profile`.
+# Times are rough guides for a mid-range laptop CPU; a GPU is much faster.
+# ---------------------------------------------------------------------------
+PROFILES: dict[str, dict] = {
+    # Smoke test: confirms the whole pipeline works (minutes).
+    "quick": {
+        "languages": ["hindi", "tamil"],
+        "samples": 10,
+        "models": ["whisper-tiny", "faster-whisper-small", "indic-conformer-600m"],
+        "conditions": ["clean"],
+    },
+    # Good default for a first real result (about an hour on CPU).
+    "standard": {
+        "languages": ["hindi", "tamil", "bengali"],
+        "samples": 50,
+        "models": ["whisper-small", "faster-whisper-small", "indic-conformer-600m"],
+        "conditions": ["clean", "snr10"],
+    },
+    # The README-quality run: 5 languages, 100 samples, 4 models, noise sweep.
+    # Realistically needs a GPU or an overnight CPU run.
+    "full": {
+        "languages": ["hindi", "tamil", "bengali", "telugu", "marathi"],
+        "samples": 100,
+        "models": ["whisper-small", "faster-whisper-small", "whisper-large-v3-turbo", "indic-conformer-600m"],
+        "conditions": ["clean", "snr20", "snr10", "snr5"],
+    },
+}
+DEFAULT_PROFILE = "quick"
+
+# Noise conditions: name -> SNR in dB (None = untouched audio).
+CONDITIONS: dict[str, float | None] = {
+    "clean": None,
+    "snr20": 20.0,
+    "snr10": 10.0,
+    "snr5": 5.0,
+}
+BACKGROUND_CONDITIONS: dict[str, float] = {
+    "background_snr20": 20.0,
+    "background_snr10": 10.0,
+    "background_snr5": 5.0,
+}
+
+# ---------------------------------------------------------------------------
+# Data, statistics, paths
+# ---------------------------------------------------------------------------
 DATASET_NAME = "google/fleurs"
-DATASET_SPLIT = "test"
+DATASET_SPLIT = "test"          # held-out split: right choice for evaluation only
+TARGET_SAMPLE_RATE = 16000      # every model here expects 16 kHz mono
 
-# ---------------------------------------------------------------------------
-# Models
-# ---------------------------------------------------------------------------
-WHISPER_CHECKPOINT = "openai/whisper-tiny"
-# NOTE: the original spec asked for whisper-small/base. On CPU, tiny is the
-# honest choice for a bounded run -- see README "Known Limitations" for the
-# full tradeoff discussion and how to switch to small/base if you have GPU
-# access or more time.
+BOOTSTRAP_RESAMPLES = 1000      # for 95% confidence intervals
+RANDOM_SEED = 1234              # noise generation + bootstrap are reproducible
+N_WORST_FAILURES = 5
+HALLUCINATION_WER = 1.0         # utterance WER above this => "hallucination"
+WRONG_SCRIPT_RATIO = 0.5        # < 50% letters in expected script => wrong script
 
-INDIC_CONFORMER_CHECKPOINT = "ai4bharat/indic-conformer-600m-multilingual"
-INDIC_CONFORMER_DECODING = "ctc"  # alternative: "rnnt"
-
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
+DATA_CACHE_DIR = "data_cache"   # FLEURS audio is exported here once, then reused
 RESULTS_DIR = "results"
-RESULTS_CSV = f"{RESULTS_DIR}/results.csv"
-RESULTS_JSON = f"{RESULTS_DIR}/results.json"
+RAW_RESULTS_JSONL = f"{RESULTS_DIR}/raw_results.jsonl"
 SUMMARY_CSV = f"{RESULTS_DIR}/summary.csv"
+LEADERBOARD_CSV = f"{RESULTS_DIR}/leaderboard.csv"
+RUN_METADATA_JSON = f"{RESULTS_DIR}/run_metadata.json"
+RESULTS_MD = f"{RESULTS_DIR}/RESULTS.md"
 REPORT_HTML = "report/report.html"
 
-# How many worst-failure examples to surface per model in the report.
-N_WORST_FAILURES = 5
+
+def get_device() -> str:
+    """'cuda' if a CUDA GPU is usable, else 'cpu'. Imported lazily."""
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except ImportError:
+        return "cpu"

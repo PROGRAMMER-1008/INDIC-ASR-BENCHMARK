@@ -1,0 +1,8 @@
+# Light dependencies: enough to run the unit tests (no models, no downloads).
+numpy>=1.24
+pandas>=2.0
+matplotlib>=3.7
+jiwer>=3.0
+psutil>=5.9
+soundfile>=0.12
+pytest>=7.0

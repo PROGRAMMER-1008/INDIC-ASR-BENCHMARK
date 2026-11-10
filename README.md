@@ -1,100 +1,120 @@
 # Indic ASR Benchmark
 
-## What this does, and why
+## What this does
 
-Speech AI teams working on Indian languages can't improve what they don't
-measure. This project benchmarks multiple open-source ASR models
-(OpenAI Whisper, AI4Bharat's indic-conformer) against a standard multilingual
-speech dataset (Google FLEURS), reporting Word Error Rate and Character Error
-Rate broken down by language and by model, with a "where does it actually
-break" view of the worst individual failures. That combination — quantified
-accuracy, per-language breakdown, and concrete failure inspection, all
-reproducible from a documented pipeline — is exactly the kind of internal
-tooling a speech AI team needs before they can responsibly ship or compare
-models for Indian-language products. Benchmarking infrastructure like this
-is the difference between "we think the new model is better" and "we can
-prove the new model is 4 points of WER better on Tamil specifically, and
-here's the failure pattern that's still unsolved."
+This project measures how open-source automatic speech recognition (ASR) models
+perform on Hindi, Tamil, Bengali, Telugu, and Marathi. It uses the Google FLEURS
+test split by default and reports word and character error rates, confidence
+intervals, speed, noise robustness, and transcript failure patterns.
 
-## Project structure
+The benchmark is designed to make comparisons reproducible: models receive the
+same audio, references and hypotheses use one shared normalizer, and every run
+records its settings and data-manifest fingerprints. It does not publish
+benchmark scores until you run it on your own machine.
 
-```
-src/
-  config.py                    # all tunable settings: languages, sample count, model checkpoints
-  normalize.py                 # text normalization (TESTED)
-  scoring.py                   # WER/CER computation via jiwer (TESTED)
-  data_loader.py                # FLEURS loading (UNTESTED — needs your run)
-  generate_report.py            # HTML report builder (TESTED with synthetic data)
-  run_benchmark.py               # main orchestration script (UNTESTED — needs your run)
-  models/
-    base.py                    # ASRModelWrapper interface every model implements
-    whisper_wrapper.py          # Whisper via transformers pipeline (UNTESTED)
-    indic_conformer_wrapper.py   # AI4Bharat indic-conformer (UNTESTED)
-results/                       # written by run_benchmark.py: results.csv, results.json, summary.csv, worst_failures.csv
-report/                        # written by generate_report.py: report.html
-dev_test_fixtures/             # synthetic data used to prove generate_report.py works — NOT real results
-requirements.txt
-```
+## Models
+
+| Model family | Implementation |
+|---|---|
+| OpenAI Whisper | Hugging Face Transformers |
+| faster-whisper | CTranslate2, including CPU int8 inference |
+| AI4Bharat IndicConformer | Multilingual Conformer with CTC decoding |
+
+## What it measures
+
+- Corpus-level WER and CER, with utterance-bootstrap 95% confidence intervals.
+- Paired model comparisons on common utterances.
+- RTFx after a warm-up call.
+- White-noise conditions and optional user-supplied background-noise recordings.
+- Empty output, wrong-script output, high-error utterances, digit-bearing references, and S/D/I counts.
+- Attempted/scored coverage, including visible inference failures that can be retried on resume.
 
 ## Setup
 
-Python 3.10+ recommended (matches what `transformers==4.44.2` and
-`datasets==2.21.0` are tested against upstream).
+Python 3.10–3.12 is recommended. Install the PyTorch build suitable for your
+machine first, then install the project requirements.
+
+```powershell
+python -m venv venv
+venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m src.doctor
+```
+
+On Linux or macOS, activate the environment with `source venv/bin/activate`.
+The FLEURS loader uses dataset scripts, so the runtime requirement pins
+`datasets<4`.
+
+## Run
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate    # Windows: venv\Scripts\activate
+# Small smoke test
+python -m src.run_benchmark --profile quick
 
-pip install -r requirements.txt
+# Build HTML and Markdown reports
+python -m src.generate_report
+
+# Choose models, languages, sample count, and noise conditions
+python -m src.run_benchmark --models whisper-small,indic-conformer-600m \
+    --languages hindi,telugu --samples 30 --conditions clean,snr10
 ```
 
-If you're on Colab, skip the venv step and just `!pip install -r requirements.txt`.
+Run `python -m src.run_benchmark --list` for available models, languages,
+profiles, and conditions. Each completed utterance is appended to
+`results/raw_results.jsonl`. Rerunning the same command skips completed work;
+failed inferences stay visible and are retried.
 
-**GPU check**: the pipeline auto-detects GPU via `torch.cuda.is_available()`
-in `config.py` and uses it if present, falling back to CPU otherwise — no
-manual flag needed. Colab's free tier T4 GPU will be picked up automatically
-if your runtime is set to GPU.
+## Add a dataset
 
-## How to run
+The default source is FLEURS. A Hugging Face ASR dataset with an audio field
+that decodes to `array` and `sampling_rate`, plus a text transcript field, can
+use the generic adapter:
 
 ```bash
-# 1. Run the benchmark (loads data, runs both models, scores, saves results/)
-python3 -m src.run_benchmark
-
-# 2. Generate the HTML report from results/
-python3 -m src.generate_report
+python -m src.run_benchmark --models whisper-small --languages hindi --samples 30 \
+    --dataset-name YOUR_ORG/YOUR_DATASET --dataset-config hindi \
+    --dataset-split test --audio-field audio --text-field transcript
 ```
 
-Open `report/report.html` in any browser — it's fully self-contained
-(charts are embedded base64 PNGs, no internet connection or server needed to
-view it after generation).
+Set `--fallback-text-field ""` if there is no fallback transcript column.
+Check dataset terms, speaker overlap, the evaluation split, and transcript
+quality before comparing results. You can also provide local WAV files and a
+`data_cache/<language>/manifest.csv` with columns
+`sample_id,wav,text,duration_s`, then run with `--no-download`.
 
-## How to add a new model
+## Add recorded background noise
 
-Every model wrapper implements one method:
+Place licensed mono or stereo WAV recordings in a directory and pass it with
+`--noise-dir`. Use `background_snr20`, `background_snr10`, or
+`background_snr5` in `--conditions`. Noise selection is deterministic by sample
+ID, and mixing preserves the target SNR without clipping.
 
-```python
-def transcribe(self, audio_array: np.ndarray, sample_rate: int, language_code: str) -> str:
-    ...
+```bash
+python -m src.run_benchmark --models whisper-small --languages hindi --samples 30 \
+    --conditions clean,background_snr10 --noise-dir noise_wavs --no-download
 ```
 
-Steps to add model #3:
-1. Create `src/models/your_model_wrapper.py`, subclass `ASRModelWrapper`
-   (`src/models/base.py`), implement `transcribe()`.
-2. Add a checkpoint constant to `config.py` if it's HF-hosted.
-3. Add one line to `MODEL_REGISTRY` in `run_benchmark.py`:
-   `"your-model-name": YourModelWrapper`
-4. Run `python3 -m src.run_benchmark` — nothing else needs to change. Scoring,
-   aggregation, and reporting all consume the same result schema regardless
-   of which model produced it.
+## Outputs
 
-## How to add a new language
+```text
+results/raw_results.jsonl   per-attempt transcripts, scores, latency, and failures
+results/summary.csv         per model/language/condition metrics and coverage
+results/leaderboard.csv     macro scores over the shared language cohort
+results/run_metadata.json   hardware, versions, settings, model IDs, manifest hashes
+results/RESULTS.md          Markdown report generated from actual run data
+report/report.html          self-contained HTML report
+```
 
-1. Add an entry to `LANGUAGES` in `config.py` with the FLEURS config name,
-   display name, and indic-conformer language code (check the model card for
-   supported language codes — indic-conformer supports a specific set of
-   Indian languages, not arbitrary ones).
-2. If using Whisper, add the language's English name to
-   `WHISPER_LANGUAGE_NAMES` in `whisper_wrapper.py`.
-3. Run the benchmark — `data_loader.py` and `run_benchmark.py` iterate over
-   whatever's in `LANGUAGES`, no other code changes needed.
+Use `python -m src.generate_report --demo` only to preview the layout. Demo
+values are synthetic and must never be presented as benchmark results.
+
+## Development
+
+```bash
+python -m pip install -r requirements-ci.txt
+python -m pytest -q
+```
+
+The offline test suite covers normalization, audio processing, scoring,
+aggregation, dataset-field mapping, report generation, and resumability.
